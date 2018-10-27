@@ -1,0 +1,16 @@
+{application, mysql_driver,
+ [{description, "mysql driver"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { mysql_driver_app, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

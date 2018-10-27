@@ -1,0 +1,10 @@
+-name mysql_driver@127.0.0.1
+-hidden
+-setcookie mysql_driver_cookie
+-smp auto
++C multi_time_warp
++P 1024000
++Q 512000
++K true
++A30
++e 10240
