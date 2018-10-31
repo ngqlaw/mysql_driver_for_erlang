@@ -4,49 +4,25 @@
 
 -include("mysql.hrl").
 
--export([start/1]).
+-export([
+	connect/1,
+	handle_connect/2,
+	handle_handshake/3
+]).
 
-start([Host, Port, InitFun, User, Password]) ->
-	case gen_tcp:connect(Host, Port, ?OPTIONS) of
-		{ok, Socket} ->
-			receive
-				{tcp, Socket, Data} ->
-					[ConnectID|ServerData] = parser_handshake(Data),
-					case response_handshake(ServerData, User, Password, Socket) of
-						{ok, ClientData} ->
-							start_handler(Socket, [InitFun, ConnectID|ClientData]);
-						Result ->
-							Result
-					end;
-				{tcp_closed, Socket} ->
-					gen_tcp:close(Socket),
-					{error, tcp_closed};
-				{tcp_error, Socket, Error} ->
-					gen_tcp:close(Socket),
-					{error, {tcp_error, Error}}
-			end;
-		{error, Reason} ->
-			{error, {connect_fail, Reason}}
-	end.
-	
-start_handler(Socket, [InitFun, ConnectID|Args]) ->
-	case mysql_sup:start_child([[Socket, ConnectID|Args]]) of
-		{ok, Pid} ->
-			case gen_tcp:controlling_process(Socket, Pid) of
-				ok ->
-					case InitFun(Pid) of
-						ok ->
-							ets:insert(mysql_conn, {ConnectID, Pid}),
-							{ok, [Pid|Args]};
-						Error ->
-							{error, {init_connect_fail, Error}}
-					end;
-				Error ->
-					{error, {handle_socket_error, Error}}
-			end;
-		Error ->
-			{error, {start_handler_error, Error}}
-	end.
+%% @doc 连接数据库
+connect(Opts) ->
+	Host = proplists:get_value(host, Opts),
+	Port = proplists:get_value(port, Opts),
+	gen_tcp:connect(Host, Port, ?OPTIONS).
+
+%% @doc 连接结果
+handle_connect(Data, Opts) ->
+	User = proplists:get_value(db_user, Opts),
+	Password = proplists:get_value(db_password, Opts),
+	[ConnectID|ServerData] = parser_handshake(Data),
+	{ok, ResponseBin, Version, Capability} = response_handshake(ServerData, User, Password),
+	{ok, ConnectID, ResponseBin, Version, Capability}.
 
 parser_handshake(<<_ByteLen:24/little, Index:8, 10:8, Rest/binary>>) ->
 	{_Version, <<ConnectID:32/little, Rest1/binary>>} = mysql_util:parser_string_null(Rest),
@@ -79,7 +55,7 @@ parser_handshake(<<_:24/little, Index:8, 9:8, Rest/binary>>) ->
 	{AuthPluginData, _} = mysql_util:parser_string_null(Rest1),
 	[ConnectID, 9, AuthPluginData, Index].
 
-response_handshake([10, Capability, AuthPluginData, CharacterSet, Index], UserName, Password, Socket) ->
+response_handshake([10, Capability, AuthPluginData, CharacterSet, Index], UserName, Password) ->
 	case ?CLIENT_PLUGIN_AUTH == Capability band ?CLIENT_PLUGIN_AUTH orelse
 		(?CLIENT_PROTOCOL_41 == Capability band ?CLIENT_PROTOCOL_41 andalso
 		?CLIENT_SECURE_CONNECTION == Capability band ?CLIENT_SECURE_CONNECTION) of
@@ -88,29 +64,11 @@ response_handshake([10, Capability, AuthPluginData, CharacterSet, Index], UserNa
 		false ->
 			ResponseBin = handshake_response_320(UserName, Password, AuthPluginData, Index + 1)
 	end,
-	do_response_handshake(Socket, ResponseBin, 10, Capability);
-response_handshake([9, AuthPluginData, Index], UserName, Password, Socket) ->
+	{ok, ResponseBin, 10, Capability};
+response_handshake([9, AuthPluginData, Index], UserName, Password) ->
 	ResponseBin = handshake_response_320(UserName, Password, AuthPluginData, Index + 1),
-	do_response_handshake(Socket, ResponseBin, 9, ?CLIENT_TRANSACTIONS).
-	
-do_response_handshake(Socket, ResponseBin, Version, Capability) ->
-	gen_tcp:send(Socket, ResponseBin),
-	receive
-		{tcp, Socket, <<_:24/little, _Index:8, Rest/binary>>} ->
-			case mysql_util:parser_handshake(Rest, Capability) of
-				{ok, _OK} ->
-					{ok, [Version, Capability]};
-				{eof, EOF} -> %% for now is not suppose to be match
-					{error, {unexpected, EOF}};
-				{error, Error} ->
-					{error, Error}
-			end;
-		{tcp_closed, _Socket} ->
-			{error, tcp_closed};
-		{tcp_error, _Socket, E} ->
-			{error, {tcp_error, E}}
-	end.
-	
+	{ok, ResponseBin, 9, ?CLIENT_TRANSACTIONS}.
+
 handshake_response_41(UserName, Password, CharacterSet, AuthPluginData, Index) ->
 	Capability = 
 	?CLIENT_PROTOCOL_41 bor 
@@ -146,3 +104,17 @@ handshake_response_320(UserName, Password, AuthPluginData, Index) ->
 	PwdBin/binary, 0:8>>,
 	Len = byte_size(Bin),
 	<<Len:24/little, Index:8, Bin/binary>>.
+
+%% @doc 握手结果
+handle_handshake(<<_:24/little, _Index:8, Rest/binary>>, Capability, Opts) ->
+	case mysql_util:parser_handshake(Rest, Capability) of
+		{ok, _OK} ->
+			DB = proplists:get_value(db_name, Opts),
+			DBBin = iolist_to_binary(DB),
+			{ok, <<"USE `", DBBin/binary, "`">>};
+		{eof, EOF} -> %% for now is not suppose to be match
+			{error, {unexpected, EOF}};
+		{error, Error} ->
+			{error, Error}
+	end.
+

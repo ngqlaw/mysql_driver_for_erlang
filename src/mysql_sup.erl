@@ -8,25 +8,27 @@
 -export([init/1]).
 
 %% API
--export([start_link/0, start_child/1]).
+-export([start_link/1, start_child/3]).
 
-start_link() ->
-	supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(Args) ->
+	supervisor:start_link(?MODULE, Args).
 	
-start_child(Args) ->
-	supervisor:start_child(?MODULE, Args).
+start_child(SupRef, Num, Args) when Num > 0 ->
+	{ok, _Child} = supervisor:start_child(SupRef, Args),
+	start_child(SupRef, Num - 1, Args);
+start_child(_SupRef, _Num, _Args) ->
+	ok.
 
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
-init([]) ->
-	ets:new(mysql_conn, [public, set, named_table, {keypos, 1}]),
+init(Args) ->
 	ChildSpec = {
 		mysql_handler,
-		{mysql_handler, start_link, []},
+		{mysql_handler, start_link, Args},
 		temporary,
 		5000,
 		worker,
 		[mysql_handler]
 	},
-    {ok, { {simple_one_for_one, 3, 60}, [ChildSpec]} }.
+    {ok, { {simple_one_for_one, 3, 10}, [ChildSpec]} }.

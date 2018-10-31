@@ -8,42 +8,46 @@
 
 %% API.
 -export([
-		start_link/1, 
+		start_link/2, 
 		send/3
 		]).
 
 %% gen_server.
--export([init/1]).
--export([handle_call/3]).
--export([handle_cast/2]).
--export([handle_info/2]).
--export([terminate/2]).
--export([code_change/3]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 -record(mysql_handle, {
-		msg = <<>>, 
-		pid = [],
-		index = 0, 
-		step = 0,
-		flag = query, 	%for now only support:query 
-		result = [],
-		is_reply = 0,	%0 | 1 <==> not reply | reply
-		bin = <<>>
-		}).
+	msg = <<>>, 
+	pid = [],
+	index = 0, 
+	step = 0,
+	flag = query_sql, 	%for now only support:query_sql 
+	result = [],
+	is_reply = 0,	%0 | 1 <==> not reply | reply
+	bin = <<>>
+}).
 
 -record(state, {
-		socket = 0, 
-		connect_id = 0, 
-		version = 10, 
-		caps = 0, 
-		handle = free % free | #mysql_handle{}
-		}).
+	pool,
+	socket = 0,
+	connect_id = 0,
+	version = 10,
+	capability = 0,
+	flag = init, 		% init | handshake | ready
+	handle = free % free | #mysql_handle{}
+}).
 
 -define(HANDSHAKE, 0).
 
 %% API.
-start_link(Args) ->
-	gen_server:start_link(?MODULE, Args, []).
+start_link(Args, Pool) ->
+	gen_server:start_link(?MODULE, [Pool, Args], []).
 
 %% @doc send the sentence to process
 send(Pid, Event, Bin) ->
@@ -62,34 +66,55 @@ send(Pid, Event, Bin) ->
 	end.
 		
 %% gen_server.
-init([Socket, ConnectID, Version, Caps]) -> 
-	{ok, #state{
-		socket = Socket, 
-		connect_id = ConnectID, 
-		version = Version, 
-		caps = Caps, 
-		handle = free}
-	}.
+init([Pool, Opts]) ->
+	case mysql_connect:connect(Opts) of
+		{ok, Socket} ->
+			{ok, #state{pool = Pool, socket = Socket, flag = init, handle = Opts}};
+		Error ->
+			{stop, Error}
+	end.
 
+handle_info({tcp, Socket, Data}, #state{socket = Socket, flag = init, handle = Opts} = State) ->
+	{ok, ConnectID, ResponseBin, Version, Capability} = mysql_connect:handle_connect(Data, Opts),
+	gen_tcp:send(Socket, ResponseBin),
+	{noreply, State#state{
+		flag = handshake,
+		connect_id = ConnectID,
+		version = Version,
+		capability = Capability
+	}};
+handle_info({tcp, Socket, Data}, #state{
+		pool = Pool,
+		socket = Socket,
+		flag = handshake,
+		capability = Capability,
+		handle = Opts
+	} = State) ->
+	case mysql_connect:handle_handshake(Data, Capability, Opts) of
+		{ok, InitBin} ->
+			Pid = self(),
+			gen_server:cast(Pid, {query_sql, {Pid, InitBin}}),
+			% 注册
+			mysql_manager:reg(Pool, Pid),
+			{noreply, State#state{flag = ready}};
+		Error ->
+			{stop, Error, State}
+	end;
 handle_info({tcp, Socket, Data}, State = #state{socket = Socket, handle = Handle}) ->
-	%io:format("receive bin:~p~n", [Data]),
 	#mysql_handle{bin = OldBin} = Handle,
 	Bin = <<OldBin/binary, Data/binary>>,
 	routing(State#state{handle = Handle#mysql_handle{bin = Bin}});
 handle_info({tcp_closed, Socket}, State = #state{socket = Socket}) ->
-	io:format("stop!~n", []),
 	{stop, normal, State};
 handle_info({tcp_error, Socket, Reason}, State = #state{socket = Socket}) ->
-	io:format("error:~p!~n", [Reason]),
 	{stop, Reason, State};
-handle_info(Info, State) ->
-	io:format("receive other info:~p~n", [Info]),
+handle_info(_Info, State) ->
 	{noreply, State}.
 
 handle_call(_Request, _From, State) ->
 	{reply, ok, State}.
 
-handle_cast({query, {Pid, String}}, State) ->
+handle_cast({query_sql, {Pid, String}}, State) ->
 	%io:format("get handle query:~p~n", [String]),
 	%% @TODO control the execute,make sure one is done!
 	SendBin = mysql_util:query_request(String, 0),
@@ -98,7 +123,7 @@ handle_cast({query, {Pid, String}}, State) ->
 		pid = [Pid],
 		index = 0, 
 		step = 0,
-		flag = query,
+		flag = query_sql,
 		result = [],
 		is_reply = 0,
 		bin = <<>>},
@@ -115,7 +140,7 @@ code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
 routing(#state{
-	caps = Capability, 
+	capability = Capability, 
 	handle = #mysql_handle{
 		bin = <<Len:24/little, Index:8, Data/binary>>, 
 		index = OldIndex
@@ -143,7 +168,7 @@ routing(#state{
 			{noreply, State}
 	end.
 	
-do_routing(#mysql_handle{flag = query, step = Step, result = Result} = Handle, 1, Capability, Bin) ->
+do_routing(#mysql_handle{flag = query_sql, step = Step, result = Result} = Handle, 1, Capability, Bin) ->
 	case mysql_util:parser_query(Bin, Capability, Step) of
 		{column_count, ColumnCount} ->
 			Handle#mysql_handle{step = 1, result = [{column, ColumnCount, 0, []}|Result]};
