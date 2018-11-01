@@ -126,3 +126,78 @@
 -define(MYSQL_TYPE_VAR_STRING, 253).
 -define(MYSQL_TYPE_STRING, 254).
 -define(MYSQL_TYPE_GEOMETRY, 255).
+
+-record(mysql_handshake_v9, {
+    connect_id = 0,
+    index = 0,
+    scramble = <<>>
+}).
+
+-record(mysql_handshake_v10, {
+    connect_id = 0,
+    index = 0,
+    scramble = <<>>,
+    capability = 0,
+    status_flags = 0,
+    character_set = 0,
+    auth_plugin_name = <<>>
+}).
+
+-record(mysql_auth_switch, {
+    index = 0,
+    plugin_name = <<>>,
+    data = <<>>
+}).
+
+-record(mysql_auth_more ,{
+    index = 0,
+    data = <<>>
+}).
+
+-record(mysql_handshake_response, {
+    connect_id = 0,
+    version = 0,
+    capability = 0,
+    response = <<>>
+}).
+
+-record(mysql_packet, {
+    sequence_id = 0,
+    payload,
+    buff = <<>>
+}).
+
+-record(mysql_ok_packet, {
+    affected_rows = 0,
+    last_insert_id = 0,
+    status_flags = 0,
+    warnings = 0,
+    session_state_info = [],
+    info = <<>>
+}).
+
+-record(mysql_err_packet, {
+    code = 0,
+    sql_state_marker = <<>>,
+    sql_state = <<>>,
+    message = <<>>
+}).
+
+-record(mysql_eof_packet, {
+    warnings = 0,
+    status_flags = 0
+}).
+
+-record(mysql_result, {
+    is_reply = 0,       % 0(not reply) | 1(reply)
+    result
+}).
+
+-record(mysql_handle, {
+    msg = <<>>,                     % common string
+    pid = [],                       % request pid
+    flag = query_sql,               % for now only support:query_sql
+    step = 0,
+    packet = #mysql_packet{}, 
+    result = #mysql_result{}
+}).

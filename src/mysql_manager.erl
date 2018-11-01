@@ -7,7 +7,7 @@
 -behaviour(gen_server).
 
 %% API.
--export([start_link/0, reg/2, get_server/1]).
+-export([start_link/0, reg/2, get_server/1, get_all/1]).
 
 %% gen_server.
 -export([
@@ -42,6 +42,10 @@ reg(Pool, Pid) ->
 get_server(Pool) ->
     gen_server:call(?MODULE, {get_pool_server, Pool}).
 
+%% @doc 获取池所有进程
+get_all(Pool) ->
+    gen_server:call(?MODULE, {get_all, Pool}).
+
 %% gen_server.
 init([]) -> 
     {ok, #state{
@@ -74,6 +78,13 @@ handle_call({get_pool_server, Pool}, _From, #state{pools = Pools} = State) ->
             {reply, Pid, State#state{pools = [NewInfo|NewPools]}};
         false ->
             {reply, undefined, State}
+    end;
+handle_call({get_all, Pool}, _From, #state{pools = Pools} = State) ->
+    case lists:keyfind(Pool, #manager_info.pool_id, Pools) of
+        #manager_info{pids = Pids} ->
+            {reply, Pids, State};
+        _ ->
+            {reply, [], State}
     end;
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.

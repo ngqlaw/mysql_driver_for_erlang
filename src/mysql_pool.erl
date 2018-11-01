@@ -8,5 +8,5 @@
 
 start(Pool, Opts) ->
     {ok, Pid} = mysql_driver_sup:start_child(Pool, [Opts]),
-    Num = proplists:get_value(num, Opts, 3),
+    Num = proplists:get_value(num, Opts, 1),
     mysql_sup:start_child(Pid, Num, [Pool]).
