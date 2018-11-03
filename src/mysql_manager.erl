@@ -97,7 +97,7 @@ handle_info({'DOWN', MonitorRef, process, Object, _Info}, #state{pools = Pools, 
     case lists:keytake(Pool, #manager_info.pool_id, Pools) of
         {value, #manager_info{pids = [Object]}, NewPools} ->
             % 子进程都关闭了，重启池
-            mysql_driver_sup:restart(Pool),
+            mysql_driver_sup:restart_child(Pool),
             {noreply, State#state{pools = NewPools, map = NewMap}};
         {value, #manager_info{pids = Pids} = Info, NewPools} ->
             NewInfo = Info#manager_info{pids = lists:delete(Object, Pids)},

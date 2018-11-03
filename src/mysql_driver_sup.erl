@@ -8,7 +8,12 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_child/2, restart_child/1]).
+-export([
+    start_link/0,
+    start_child/2,
+    restart_child/1,
+    stop_child/1
+]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -27,9 +32,20 @@ start_child(Id, Opts) ->
     supervisor:start_child(?SERVER, ChildSpec).
 
 restart_child(Id) ->
-    ok = supervisor:terminate_child(?SERVER, Id),
-    {ok, _} = supervisor:restart_child(?SERVER, Id),
-    ok.
+    case supervisor:terminate_child(?SERVER, Id) of
+        ok ->
+            supervisor:restart_child(?SERVER, Id);
+        Error ->
+            Error
+    end.
+
+stop_child(Id) ->
+    case supervisor:terminate_child(?SERVER, Id) of
+        ok ->
+            supervisor:delete_child(?SERVER, Id);
+        Error ->
+            Error
+    end.
 
 %%====================================================================
 %% Supervisor callbacks

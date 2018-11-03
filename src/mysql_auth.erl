@@ -5,7 +5,7 @@
 -include("mysql.hrl").
 
 -export([
-    handshake_response/4,
+    handshake_response/3,
     handshake_other/1
 ]).
 
@@ -20,8 +20,8 @@ handshake_response(#mysql_handshake_v9{
         connect_id = ConnectID,
         index = Index,
         scramble = Scramble
-    }, UserName, Password, DBName) ->
-    Res = handshake_response_320(UserName, Password, DBName, Scramble, Index + 1),
+    }, UserName, Password) ->
+    Res = handshake_response_320(UserName, Password, Scramble, Index + 1),
     Res#mysql_handshake_response{
         connect_id = ConnectID,
         version = 9
@@ -34,12 +34,12 @@ handshake_response(#mysql_handshake_v10{
         status_flags = _StatusFlags,
         character_set = CharacterSet,
         auth_plugin_name = _AuthPluginName
-    }, UserName, Password, DBName) ->
+    }, UserName, Password) ->
     Res = case ?CLIENT_PROTOCOL_41 == (Capability band ?CLIENT_PROTOCOL_41) of
         true ->
-            handshake_response_41(UserName, Password, DBName, CharacterSet, Scramble, Index + 1);
+            handshake_response_41(UserName, Password, CharacterSet, Scramble, Index + 1);
         false ->
-            handshake_response_320(UserName, Password, DBName, Scramble, Index + 1)
+            handshake_response_320(UserName, Password, Scramble, Index + 1)
     end,
     Res#mysql_handshake_response{
         connect_id = ConnectID,
@@ -51,12 +51,11 @@ handshake_other(#mysql_auth_switch{}) ->
 handshake_other(#mysql_auth_more{}) ->
     skip.
 
-handshake_response_41(UserName, Password, DBName, CharacterSet, Scramble, Index) ->
+handshake_response_41(UserName, Password, CharacterSet, Scramble, Index) ->
     Capability = 
         ?CLIENT_PROTOCOL_41 bor 
         ?CLIENT_LONG_PASSWORD bor 
         ?CLIENT_LONG_FLAG bor
-        ?CLIENT_CONNECT_WITH_DB bor
         ?CLIENT_SECURE_CONNECTION bor
         ?CLIENT_TRANSACTIONS,
     AuthResponse = auth(<<"mysql_native_password">>, Scramble, Password),
@@ -64,8 +63,7 @@ handshake_response_41(UserName, Password, DBName, CharacterSet, Scramble, Index)
     Payload = list_to_binary([
         <<Capability:32/little, ?MAX_PACKET_SIZE:32/little, CharacterSet:8, 0:23/integer-unit:8>>,
         UserName, <<0:8>>, 
-        <<AuthLen:8, AuthResponse/binary, 0:8>>,
-        DBName, <<0:8>>
+        <<AuthLen:8, AuthResponse/binary, 0:8>>
     ]),
     Len = byte_size(Payload),
     #mysql_handshake_response{
@@ -73,18 +71,16 @@ handshake_response_41(UserName, Password, DBName, CharacterSet, Scramble, Index)
         response = <<Len:24/little, Index:8, Payload/binary>>
     }.
 
-handshake_response_320(UserName, Password, DBName, Scramble, Index) ->
+handshake_response_320(UserName, Password, Scramble, Index) ->
     Capability = 
         ?CLIENT_LONG_PASSWORD bor 
         ?CLIENT_LONG_FLAG bor
-        ?CLIENT_CONNECT_WITH_DB bor
         ?CLIENT_TRANSACTIONS,
     AuthResponse = auth(<<"mysql_old_password">>, Scramble, Password),
     Payload = list_to_binary([
         <<Capability:16/little, ?MAX_PACKET_SIZE:24/little>>,
         UserName, <<0:8>>, 
-        AuthResponse, <<0:8>>,
-        DBName, <<0:8>>
+        AuthResponse, <<0:8>>
     ]),
     Len = byte_size(Payload),
     #mysql_handshake_response{

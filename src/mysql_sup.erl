@@ -8,16 +8,10 @@
 -export([init/1]).
 
 %% API
--export([start_link/1, start_child/3]).
+-export([start_link/1]).
 
 start_link(Args) ->
 	supervisor:start_link(?MODULE, Args).
-	
-start_child(SupRef, Num, Args) when Num > 0 ->
-	{ok, _Child} = supervisor:start_child(SupRef, Args),
-	start_child(SupRef, Num - 1, Args);
-start_child(_SupRef, _Num, _Args) ->
-	ok.
 
 %% ===================================================================
 %% Supervisor callbacks
