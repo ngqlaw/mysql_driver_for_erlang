@@ -17,16 +17,16 @@ decode(<<Len:24/little, Index:8, Data/binary>>) ->
 %% @doc handshake result
 response(Data, Capability, #mysql_handle{packet = #mysql_packet{buff = Buff}} = Handle) ->
     case mysql_packet:decode(Data, Buff, Capability) of
-        #mysql_packet{sequence_id = Index, payload = true, buff = Payload} ->
+        {#mysql_packet{sequence_id = Index, payload = true, buff = Payload}, _} ->
             % exchange further packets
             {further, parser(Payload, Index)};
-        #mysql_packet{payload = false} = NewPacket ->
+        {#mysql_packet{payload = false} = NewPacket, _} ->
             {need_more, Handle#mysql_handle{packet = NewPacket}};
-        #mysql_packet{payload = #mysql_ok_packet{}} ->
+        {#mysql_packet{payload = #mysql_ok_packet{}}, _} ->
             ok;
-        #mysql_packet{payload = #mysql_err_packet{code = Code, message = Msg}} ->
+        {#mysql_packet{payload = #mysql_err_packet{code = Code, message = Msg}}, _} ->
             {error, {Code, Msg}};
-        Error ->
+        {Error, _} ->
             {error, Error}
     end.
 

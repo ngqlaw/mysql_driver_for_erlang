@@ -38,9 +38,9 @@ decode(Packet, Capability, 1) ->
             column_definition_320(Packet, Capability, ?COM_QUERY)
     end,
     {column_definition, ColumnDefinition};
-decode(<<251:8, _Bin/binary>>, _Capability, 3) ->
+decode(<<251:8, _Bin/binary>>, _Capability, 2) ->
     {row, []};
-decode(Packet, _Capability, 3) ->
+decode(Packet, _Capability, 2) ->
     RowInfo = mysql_util:parser_string_lenencs(Packet),
     {row, RowInfo}.
 

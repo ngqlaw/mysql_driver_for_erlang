@@ -10,16 +10,17 @@
 
 %% @doc decode general packet
 decode(<<Len:24/little, Index:8, Data/binary>>, Buff, Capability) ->
-    {Payload, _RestBin} = erlang:split_binary(Data, Len),
+    {Payload, RestBin} = erlang:split_binary(Data, Len),
     NewPayload = <<Buff/binary, Payload/binary>>,
-    case parser_gen_packet(NewPayload, Capability) of
+    Packet = case parser_gen_packet(NewPayload, Capability) of
         {error, need_more} ->
             #mysql_packet{sequence_id = Index, payload = false, buff = NewPayload};
         {error, unknown_packet_form} ->
             #mysql_packet{sequence_id = Index, payload = true, buff = NewPayload};
         Res ->
             #mysql_packet{sequence_id = Index, payload = Res}
-    end.
+    end,
+    {Packet, RestBin}.
 
 %% for general packet
 parser_gen_packet(<<255:8, 255:8, 255:8, _Packet/binary>>, _Capability) ->

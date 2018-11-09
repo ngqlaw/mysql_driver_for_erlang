@@ -10,36 +10,46 @@
 ]).
 
 %% @doc handle mysql command
-routing(query_sql, Capability, Handle, Data) ->
-    #mysql_handle{
-        step = Step,
-        packet = #mysql_packet{
-            sequence_id = OldIndex,
-            buff = Buff
-        }
-    } = Handle,
+routing(query_sql, Capability, #mysql_handle{
+        packet = #mysql_packet{buff = Buff}
+    } = Handle, Data) ->
     case mysql_packet:decode(Data, Buff, Capability) of
-        #mysql_packet{payload = false} = NewPacket ->
-            {need_more, Handle#mysql_handle{packet = NewPacket}};
-        #mysql_packet{payload = true} = NewPacket ->
-            #mysql_handle{
-                result = #mysql_result{is_reply = IsReply}
-            } = NewHandle = do_routing(Handle#mysql_handle{
-                packet = NewPacket
-            }, Step, OldIndex, Capability),
-            case IsReply == 0 of
-                true ->
-                    {continue, NewHandle};
-                false ->
-                    {ok, NewHandle}
-            end;
-        #mysql_packet{payload = #mysql_ok_packet{}} ->
-            {error, ok};
-        #mysql_packet{payload = #mysql_err_packet{code = Code, message = Msg}} ->
-            {error, {Code, Msg}};
-        #mysql_packet{payload = Payload} ->
-            {error, Payload}
+        {Res, <<>>} ->
+            handle_res(Res, Handle, Capability);
+        {Res, NewData} ->
+            case handle_res(Res, Handle, Capability) of
+                {_, #mysql_handle{} = NewHandle} ->
+                    routing(query_sql, Capability, NewHandle, NewData);
+                Error ->
+                    Error
+            end
     end.
+
+handle_res(#mysql_packet{payload = false} = Packet, Handle, _Capability) ->
+    {need_more, Handle#mysql_handle{packet = Packet}};
+handle_res(#mysql_packet{payload = true} = Packet, #mysql_handle{
+        step = Step,
+        packet = #mysql_packet{sequence_id = OldIndex}
+    } = Handle, Capability) ->
+    #mysql_handle{
+        result = #mysql_result{is_reply = IsReply}
+    } = NewHandle = do_routing(Handle#mysql_handle{
+        packet = Packet
+    }, Step, OldIndex, Capability),
+    case IsReply == 0 of
+        true ->
+            {continue, NewHandle#mysql_handle{packet = Packet#mysql_packet{buff = <<>>}}};
+        false ->
+            {ok, NewHandle#mysql_handle{packet = Packet#mysql_packet{buff = <<>>}}}
+    end;
+handle_res(#mysql_packet{payload = #mysql_ok_packet{}}, _Handle, _Capability) ->
+    {error, ok};
+handle_res(#mysql_packet{payload = #mysql_err_packet{code = Code, message = Msg}}, _Handle, _Capability) ->
+    {error, {Code, Msg}};
+handle_res(#mysql_packet{payload = #mysql_eof_packet{}} = Packet, Handle, _Capability) ->
+    {ok, Handle#mysql_handle{packet = Packet#mysql_packet{payload = undefined, buff = <<>>}}};
+handle_res(#mysql_packet{payload = Payload}, _Handle, _Capability) ->
+    {error, Payload}.
 
 do_routing(#mysql_handle{
         packet = #mysql_packet{
