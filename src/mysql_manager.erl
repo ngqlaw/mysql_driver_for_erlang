@@ -7,7 +7,14 @@
 -behaviour(gen_server).
 
 %% API.
--export([start_link/0, reg/2, get_server/1, get_all/1]).
+-export([
+    start_link/0,
+    reg_pool/2,
+    unreg_pool/1,
+    reg/2,
+    get_server/1,
+    get_all/1
+]).
 
 %% gen_server.
 -export([
@@ -26,6 +33,7 @@
 
 -record(manager_info, {
     pool_id,
+    opts = [],
     index = 0,
     pids = []
 }).
@@ -33,6 +41,14 @@
 %% API.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+%% @doc 注册池
+reg_pool(Pool, Opts) ->
+    gen_server:call(?MODULE, {reg_pool, Pool, Opts}).
+
+%% @doc 取消注册池
+unreg_pool(Pool) ->
+    gen_server:call(?MODULE, {unreg_pool, Pool}).
 
 %% @doc 注册池进程
 reg(Pool, Pid) ->
@@ -53,18 +69,27 @@ init([]) ->
         map = #{}
     }}.
 
+handle_call({reg_pool, Pool, Opts}, _From, #state{pools = Pools} = State) ->
+    case lists:keymember(Pool, #manager_info.pool_id, Pools) of
+        true->
+            {reply, false, State};
+        false ->
+            NewInfo = #manager_info{pool_id = Pool, opts = Opts, index = 1, pids = []},
+            {reply, true, State#state{pools = [NewInfo|Pools]}}
+    end;
+handle_call({unreg_pool, Pool}, _From, #state{pools = Pools} = State) ->
+    NewPools = lists:keydelete(Pool, #manager_info.pool_id, Pools),
+    {reply, ok, State#state{pools = NewPools}};
 handle_call({reg, Pool, Pid}, _From, #state{pools = Pools, map = Map} = State) ->
     % 监控子进程
     NewMap = maps:merge(Map, #{erlang:monitor(process, Pid) => Pool}),
-    NewPools = case lists:keytake(Pool, #manager_info.pool_id, Pools) of
-        {value, #manager_info{pids = Pids} = Info, RestPools} ->
-            NewInfo = Info#manager_info{pids = [Pid|Pids]},
-            [NewInfo|RestPools];
-        false ->
-            NewInfo = #manager_info{pool_id = Pool, index = 1, pids = [Pid]},
-            [NewInfo|Pools]
-    end,
-    {reply, ok, State#state{pools = NewPools, map = NewMap}};
+    {value, #manager_info{
+        pids = Pids
+    } = Info, RestPools} = lists:keytake(Pool, #manager_info.pool_id, Pools),
+    {reply, ok, State#state{
+        pools = [Info#manager_info{pids = [Pid|Pids]}|RestPools],
+        map = NewMap
+    }};
 handle_call({get_pool_server, Pool}, _From, #state{pools = Pools} = State) ->
     case lists:keytake(Pool, #manager_info.pool_id, Pools) of
         {value, #manager_info{index = Index, pids = Pids} = Info, NewPools} ->
@@ -95,13 +120,9 @@ handle_cast(_Msg, State) ->
 handle_info({'DOWN', MonitorRef, process, Object, _Info}, #state{pools = Pools, map = Map} = State) ->
     {Pool, NewMap} = maps:take(MonitorRef, Map),
     case lists:keytake(Pool, #manager_info.pool_id, Pools) of
-        {value, #manager_info{pids = [Object]}, NewPools} ->
-            % 子进程都关闭了，重启池
-            mysql_driver_sup:restart_child(Pool),
-            {noreply, State#state{pools = NewPools, map = NewMap}};
         {value, #manager_info{pids = Pids} = Info, NewPools} ->
-            NewInfo = Info#manager_info{pids = lists:delete(Object, Pids)},
             lager:warning("Pool ~p down one connect!", [Pool]),
+            NewInfo = Info#manager_info{pids = lists:delete(Object, Pids)},
             {noreply, State#state{pools = [NewInfo|NewPools], map = NewMap}};
         false ->
             {noreply, State}
