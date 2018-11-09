@@ -21,14 +21,14 @@ parser_integer(<<254:8, Rest/binary>>) when byte_size(Rest) < 8 ->
 	eof;
 parser_integer(<<Integer:8, Rest/binary>>) ->
 	{Integer, Rest}.
-	
+
 parser_string_null(Bin) ->
 	parser_string_null(Bin, <<>>).
 parser_string_null(<<I:8,Rest/binary>>, Result) when I > 0 ->
 	parser_string_null(Rest, <<Result/binary, I:8>>);
 parser_string_null(<<_:8, Bin/binary>>, Result) ->
 	{Result, Bin}.
-	
+
 parser_string_lenenc(Bin) ->
 	{Len, Rest} = parser_integer(Bin),
 	erlang:split_binary(Rest, Len).
@@ -37,7 +37,7 @@ parser_string_lenencs(Bin) ->
 	parser_string_lenencs(Bin, []).
 
 parser_string_lenencs(<<>>, Acc) ->
-	Acc;
+	lists:reverse(Acc);
 parser_string_lenencs(Bin, Acc) ->
 	{Value, Rest} = parser_string_lenenc(Bin),
 	parser_string_lenencs(Rest, [Value|Acc]).

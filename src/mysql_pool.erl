@@ -16,7 +16,7 @@ start(Pool, Opts) ->
         DBName ->
             fun(P) ->
                 Res = mysql_lib:execute(Pool, list_to_binary(["use ", DBName])),
-                P ! ok
+                P ! Res
             end
     end,
     start_child(Pid, Num, Pool, self(), InitFun),
@@ -35,8 +35,11 @@ start_child(_SupRef, _Num, _Pool, _Parent, _InitFun) ->
 
 wait_loop(N) when N > 0 ->
     receive
-        ok -> wait_loop(N - 1)
-    end;
+        ok -> ok;
+        Error ->
+            lager:error("fail connect:~p", [Error])
+    end,
+    wait_loop(N - 1);
 wait_loop(_) -> ok.
 
 %% @doc 关闭池

@@ -120,7 +120,7 @@ do_routing(#mysql_handle{
                         false -> 3
                     end,
                     NewResultInfo = ResultInfo#mysql_result{
-                        result = [{column, ColumnCount, [ColumnDefinition|Columns]}|T]
+                        result = [{column, ColumnCount, lists:reverse([ColumnDefinition|Columns])}|T]
                     },
                     Handle#mysql_handle{step = NewStep, result = NewResultInfo};
                 false ->

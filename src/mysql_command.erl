@@ -40,7 +40,13 @@ decode(Packet, Capability, 1) ->
 decode(<<251:8, _Bin/binary>>, _Capability, 3) ->
     {row, []};
 decode(Packet, _Capability, 3) ->
-    RowInfo = mysql_util:parser_string_lenencs(Packet),
+    RowInfo = case binary:split(Packet, [<<251:8>>], [global]) of
+        [_] ->
+            mysql_util:parser_string_lenencs(Packet);
+        [H|BinList] ->
+            Tail = lists:append([[<<"null">> | mysql_util:parser_string_lenencs(Bin)] || Bin <- BinList]),
+            lists:append(mysql_util:parser_string_lenencs(H), Tail)
+    end,
     {row, RowInfo}.
 
 %% Protocol::ColumnDefinition41
