@@ -30,17 +30,16 @@ decode(Packet, _Capability, 0) ->
             {error, unknown_packet_form}
     end;
 decode(Packet, Capability, 1) ->
-    ColumnDefinition =
-    case ?CLIENT_PROTOCOL_41 == Capability band ?CLIENT_PROTOCOL_41 of
+    ColumnDefinition = case ?CLIENT_PROTOCOL_41 == Capability band ?CLIENT_PROTOCOL_41 of
         true ->
             column_definition_41(Packet, Capability, ?COM_QUERY);
         false ->
             column_definition_320(Packet, Capability, ?COM_QUERY)
     end,
     {column_definition, ColumnDefinition};
-decode(<<251:8, _Bin/binary>>, _Capability, 2) ->
+decode(<<251:8, _Bin/binary>>, _Capability, 3) ->
     {row, []};
-decode(Packet, _Capability, 2) ->
+decode(Packet, _Capability, 3) ->
     RowInfo = mysql_util:parser_string_lenencs(Packet),
     {row, RowInfo}.
 

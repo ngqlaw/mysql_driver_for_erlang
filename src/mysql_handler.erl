@@ -149,7 +149,6 @@ handle_info({tcp, Socket, Data}, State = #state{
 		capability = Capability, 
 		handle = Handle
 	}) ->
-	lager:info("receive:~p", [Data]),
 	NewState = case mysql_route:routing(Flag, Capability, Handle, Data) of
 		{ok, NewHandle} ->
 			reply_result(NewHandle),

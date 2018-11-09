@@ -190,7 +190,7 @@
 
 -record(mysql_result, {
     is_reply = 0,       % 0(not reply) | 1(reply)
-    result
+    result = []
 }).
 
 -record(mysql_handle, {

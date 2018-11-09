@@ -18,10 +18,10 @@ routing(query_sql, Capability, #mysql_handle{
             handle_res(Res, Handle, Capability);
         {Res, NewData} ->
             case handle_res(Res, Handle, Capability) of
-                {_, #mysql_handle{} = NewHandle} ->
+                {continue, #mysql_handle{} = NewHandle} ->
                     routing(query_sql, Capability, NewHandle, NewData);
-                Error ->
-                    Error
+                Reply ->
+                    Reply
             end
     end.
 
@@ -46,8 +46,51 @@ handle_res(#mysql_packet{payload = #mysql_ok_packet{}}, _Handle, _Capability) ->
     {error, ok};
 handle_res(#mysql_packet{payload = #mysql_err_packet{code = Code, message = Msg}}, _Handle, _Capability) ->
     {error, {Code, Msg}};
-handle_res(#mysql_packet{payload = #mysql_eof_packet{}} = Packet, Handle, _Capability) ->
-    {ok, Handle#mysql_handle{packet = Packet#mysql_packet{payload = undefined, buff = <<>>}}};
+handle_res(#mysql_packet{payload = #mysql_eof_packet{
+        warnings = Warnings,
+        status_flags = StatusFlags
+    }} = Packet, #mysql_handle{
+        step = 2,
+        result = #mysql_result{
+            result = Result
+        } = ResultInfo
+    } = Handle, _Capability) ->
+    NewResultInfo = ResultInfo#mysql_result{
+        result = [{eof, Warnings, StatusFlags}|Result]
+    },
+    {continue, Handle#mysql_handle{
+        step = 3,
+        packet = Packet#mysql_packet{payload = undefined, buff = <<>>},
+        result = NewResultInfo
+    }};
+handle_res(#mysql_packet{payload = #mysql_eof_packet{
+        warnings = Warnings,
+        status_flags = StatusFlags
+    }} = Packet, #mysql_handle{
+        result = #mysql_result{
+            result = Result
+        } = ResultInfo
+    } = Handle, _Capability) ->
+    case ?SERVER_MORE_RESULTS_EXISTS == ?SERVER_MORE_RESULTS_EXISTS band StatusFlags of
+        true ->
+            NewResultInfo = ResultInfo#mysql_result{
+                result = [{eof, Warnings, StatusFlags}|Result]
+            },
+            {continue, Handle#mysql_handle{
+                step = 0,
+                packet = Packet#mysql_packet{payload = undefined, buff = <<>>},
+                result = NewResultInfo
+            }};
+        false ->
+            NewResultInfo = ResultInfo#mysql_result{
+                is_reply = 1,
+                result = lists:reverse([{eof, Warnings, StatusFlags}|Result])
+            },
+            {ok, Handle#mysql_handle{
+                packet = Packet#mysql_packet{payload = undefined, buff = <<>>},
+                result = NewResultInfo
+            }}
+    end;
 handle_res(#mysql_packet{payload = Payload}, _Handle, _Capability) ->
     {error, Payload}.
 
@@ -91,29 +134,10 @@ do_routing(#mysql_handle{
                 result = [{row, RowInfo}|Result]
             },
             Handle#mysql_handle{result = NewResultInfo};
-        {eof, EOF} when Step == 2 ->
-            NewResultInfo = ResultInfo#mysql_result{
-                result = [{eof, EOF}|Result]
-            },
-            Handle#mysql_handle{step = 3, result = NewResultInfo};
-        {eof, [_Warnings, StatusFlags] = EOF} when Step == 4 ->
-            case ?SERVER_MORE_RESULTS_EXISTS == ?SERVER_MORE_RESULTS_EXISTS band StatusFlags of
-                true ->
-                    NewResultInfo = ResultInfo#mysql_result{
-                        result = [{eof, EOF}|Result]
-                    },
-                    Handle#mysql_handle{step = 0, result = NewResultInfo};
-                false ->
-                    NewResultInfo = ResultInfo#mysql_result{
-                        is_reply = 1,
-                        result = [{eof, EOF}|Result]
-                    },
-                    Handle#mysql_handle{result = NewResultInfo}
-            end;
         Other ->
             NewResultInfo = ResultInfo#mysql_result{
                 is_reply = 1,
-                result = [Other|Result]
+                result = lists:reverse([Other|Result])
             },
             Handle#mysql_handle{result = NewResultInfo}
     end.

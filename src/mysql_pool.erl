@@ -15,7 +15,7 @@ start(Pool, Opts) ->
             fun(P) -> P ! ok end;
         DBName ->
             fun(P) ->
-                mysql_lib:execute(Pool, list_to_binary(["use ", DBName])),
+                Res = mysql_lib:execute(Pool, list_to_binary(["use ", DBName])),
                 P ! ok
             end
     end,
@@ -24,7 +24,7 @@ start(Pool, Opts) ->
 
 start_child(SupRef, Num, Pool, Parent, InitFun) when Num > 0 ->
     spawn_link(fun() ->
-        {ok, _Child} = supervisor:start_child(SupRef, [Parent, Pool]),
+        {ok, _Child} = supervisor:start_child(SupRef, [self(), Pool]),
         receive
             ok -> InitFun(Parent)
         end
