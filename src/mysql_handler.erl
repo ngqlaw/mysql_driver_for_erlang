@@ -34,9 +34,12 @@
 	cache
 }).
 
-%% API.
-start_link(Args, SendPid, Pool) ->
-	gen_server:start_link(?MODULE, [SendPid, Pool, Args], []).
+%%====================================================================
+%% API functions
+%%====================================================================
+
+start_link(Pool, InitFun, Opts) ->
+	gen_server:start_link(?MODULE, [Pool, InitFun, Opts], []).
 
 %% @doc send the sentence to process and wait for reply
 call(Pid, Event, Bin) ->
@@ -56,12 +59,15 @@ call(Pid, Event, Bin, Timeout) ->
 cast(Pid, Event, Bin) ->
 	gen_server:cast(Pid, {Event, {undefined, Bin}}).
 		
-%% gen_server.
-init([SendPid, Pool, Opts]) ->
+%%====================================================================
+%% gen_server callbacks
+%%====================================================================
+
+init([Pool, InitFun, Opts]) ->
 	case mysql_connect:start(Opts) of
 		{ok, Socket} ->
 			{ok, #state{
-				pool = {Pool, SendPid},
+				pool = {Pool, InitFun},
 				socket = Socket,
 				flag = init,
 				handle = Opts,
@@ -120,7 +126,7 @@ handle_info({tcp, Socket, Data}, #state{socket = Socket, flag = init, handle = O
 		handle = #mysql_handle{}
 	}};
 handle_info({tcp, Socket, Data}, #state{
-		pool = {Pool, SendPid},
+		pool = {Pool, InitFun},
 		socket = Socket,
 		flag = handshake,
 		capability = Capability,
@@ -129,8 +135,7 @@ handle_info({tcp, Socket, Data}, #state{
 	case mysql_handshake:response(Data, Capability, Handle) of
 		ok ->
 			% register
-			mysql_manager:reg(Pool, self()),
-			SendPid ! ok,
+			mysql_manager:reg(Pool, self(), InitFun),
 			{noreply, State#state{pool = Pool, flag = ready, handle = undefined}};
 		{need_more, NewHandle} ->
 			{noreply, State#state{handle = NewHandle}};
@@ -179,6 +184,10 @@ terminate(_Reason, #state{socket = Socket}) ->
 
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
+
+%%====================================================================
+%% internal functions
+%%====================================================================
 
 %% 缓存指令
 cache(Cache, Event, Pid, String) ->
