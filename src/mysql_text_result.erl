@@ -16,6 +16,7 @@
 decode(<<251:8, Filename/binary>> = Data, Capability, undefined) ->
     case ?CLIENT_LOCAL_FILES == ?CLIENT_LOCAL_FILES band Capability of
         true ->
+            %% TODO 不准确的区分，建议不要使用该功能
             #mysql_local_infile{filename = Filename};
         false ->
             decode(Data, Capability, init(Capability))
@@ -33,9 +34,9 @@ mutil(#mysql_result{
     result = #mysql_query{} = Query,
     reply = ReplyList
 } = ResultInfo, StatusFlags) ->
-    case ?SERVER_MORE_RESULTS_EXISTS == ?SERVER_MORE_RESULTS_EXISTS band StatusFlags of
+    case is_mutil(StatusFlags) of
         true ->
-            {continue, ResultInfo#mysql_result{
+            {need_more, ResultInfo#mysql_result{
                 result = undefined,
                 reply = [Query|ReplyList]
             }};
@@ -45,6 +46,18 @@ mutil(#mysql_result{
                 result = undefined,
                 reply = lists:reverse([Query|ReplyList])
             }}
+    end;
+mutil(#mysql_result{
+    reply = ReplyList
+} = ResultInfo, StatusFlags) ->
+    case is_mutil(StatusFlags) of
+        true ->
+            {need_more, ResultInfo#mysql_result{
+                is_reply = false,
+                reply = lists:reverse(ReplyList)
+            }};
+        false ->
+            {ok, ResultInfo}
     end.
 
 %%%===================================================================
@@ -102,3 +115,7 @@ decode_text({row, RowInfo}, #mysql_query{
     rows = Rows
 } = Query) ->
     Query#mysql_query{rows = [RowInfo|Rows]}.
+
+%% 是否多结果
+is_mutil(StatusFlags) ->
+    ?SERVER_MORE_RESULTS_EXISTS == ?SERVER_MORE_RESULTS_EXISTS band StatusFlags.

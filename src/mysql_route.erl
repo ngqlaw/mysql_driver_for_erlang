@@ -65,9 +65,13 @@ handle_res(#mysql_packet{
         result = NewResultInfo
     }};
 handle_res(#mysql_packet{
-    payload = #mysql_ok_packet{}
+    payload = #mysql_ok_packet{status_flags = StatusFlags}
 } = Packet, Handle, _Capability) ->
-    {ok, reply(Packet, Handle)};
+    #mysql_handle{
+        result = #mysql_result{} = ResultInfo
+    } = TempHandle = reply(Packet, Handle),
+    {Mark, NewResultInfo} = mysql_text_result:mutil(ResultInfo, StatusFlags),
+    {Mark, TempHandle#mysql_handle{result = NewResultInfo}};
 %% auth more
 handle_res(#mysql_packet{payload = #mysql_auth_more{}} = Packet, Handle, _Capability) ->
     {continue, Handle#mysql_handle{packet = Packet}};

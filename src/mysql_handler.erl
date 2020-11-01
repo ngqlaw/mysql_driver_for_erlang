@@ -192,7 +192,7 @@ next(#state{
 	end;
 next(#state{handle = Handle} = State) ->
 	reply_result(Handle),
-	% 触发执行缓存内容
+	%% 触发执行缓存内容
 	next(),
 	State#state{flag = ready, handle = undefined}.
 

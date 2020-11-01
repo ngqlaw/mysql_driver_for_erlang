@@ -4,7 +4,7 @@
 
 -include("mysql.hrl").
 
--export([pool/0, execute/1, stop/0]).
+-export([pool/0, execute/1]).
 
 -define(APP, mysql_driver_app).
 -define(POOL, mysql_pool).
@@ -38,7 +38,3 @@ execute(String) ->
     execute(Pid, String).
 execute(Pid, String) when is_pid(Pid) ->
     mysql_handler:call(Pid, query_sql, String).
-
-%% @doc 关闭mysql池
-stop() ->
-    poolboy:stop(?POOL).

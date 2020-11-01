@@ -9,7 +9,7 @@
         poolboy
     ]},
     {env, [
-        {pool_size, 1},
+        {pool_size, 5},
         {pool_max_overflow, 10}
     ]},
     {modules, []},
