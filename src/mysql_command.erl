@@ -5,31 +5,38 @@
 -include("mysql.hrl").
 
 -export([
-    encode/2,
+    encode/3,
     decode/3
 ]).
 
 %% @doc 发送请求
-encode(String, Index) when is_list(String) ->
-    Bin = iolist_to_binary(String),
-    encode(Bin, Index);
-encode(Bin, Index) when is_binary(Bin) ->
-    Len = byte_size(Bin) + 1,
-    <<Len:24/little, Index:8, ?COM_QUERY:8, Bin/binary>>.
+encode(?COM_TEXT, Content, Index) when is_binary(Content) ->
+    Len = byte_size(Content),
+    <<Len:24/little, Index:8, Content/binary>>;
+encode(COM, Content, Index) when is_binary(Content) ->
+    Len = byte_size(Content) + 1,
+    <<Len:24/little, Index:8, COM:8, Content/binary>>;
+encode(COM, Content, Index) when is_list(Content) ->
+    Bin = iolist_to_binary(Content),
+    encode(COM, Bin, Index).
 
 %% @doc for query result
-decode(Packet, _Capability, 0) ->
-    case mysql_util:parser_integer(Packet) of
-        {251, <<>>} ->
-            {column_count, 251};
-        {251, Rest} -> %for now is ignore
-            {?CLIENT_LOCAL_FILES, Rest};
+decode(#mysql_query{step = 0, metadata_mark = ?RESULTSET_METADATA_NONE}, Packet, _Capability) ->
+    {MetadataMark, Packet0} = mysql_util:parser_integer(Packet),
+    case mysql_util:parser_integer(Packet0) of
         {ColumnCount, <<>>} ->
-            {column_count, ColumnCount};
+            {column_count, ColumnCount, MetadataMark};
         {_, _} ->
             {error, unknown_packet_form}
     end;
-decode(Packet, Capability, 1) ->
+decode(#mysql_query{step = 0, metadata_mark = MetadataMark}, Packet, _Capability) ->
+    case mysql_util:parser_integer(Packet) of
+        {ColumnCount, <<>>} ->
+            {column_count, ColumnCount, MetadataMark};
+        {_, _} ->
+            {error, unknown_packet_form}
+    end;
+decode(#mysql_query{step = 1}, Packet, Capability) ->
     ColumnDefinition = case ?CLIENT_PROTOCOL_41 == Capability band ?CLIENT_PROTOCOL_41 of
         true ->
             column_definition_41(Packet, Capability, ?COM_QUERY);
@@ -37,14 +44,15 @@ decode(Packet, Capability, 1) ->
             column_definition_320(Packet, Capability, ?COM_QUERY)
     end,
     {column_definition, ColumnDefinition};
-decode(<<251:8, _Bin/binary>>, _Capability, 3) ->
+decode(#mysql_query{step = 2}, <<251:8, _Bin/binary>>, _Capability) ->
     {row, []};
-decode(Packet, _Capability, 3) ->
+decode(#mysql_query{step = 2}, Packet, _Capability) ->
     RowInfo = case binary:split(Packet, [<<251:8>>], [global]) of
         [_] ->
             mysql_util:parser_string_lenencs(Packet);
         [H|BinList] ->
-            Tail = lists:append([[<<"null">> | mysql_util:parser_string_lenencs(Bin)] || Bin <- BinList]),
+            Tail = lists:append([[<<"null">> | mysql_util:parser_string_lenencs(Bin)]
+                || Bin <- BinList]),
             lists:append(mysql_util:parser_string_lenencs(H), Tail)
     end,
     {row, RowInfo}.
@@ -90,7 +98,8 @@ column_definition_41(Bin, _Capability, COM) ->
         false ->
             DefaultValues = <<>>
     end,
-    [Catalog, Schema, Table, OrgTable, Name, OrgName, CharacterSet, ColumnLength, Type, Flags, Decimals, DefaultValues].
+    [Catalog, Schema, Table, OrgTable, Name, OrgName, CharacterSet,
+        ColumnLength, Type, Flags, Decimals, DefaultValues].
 
 %% Protocol::ColumnDefinition320
 %% lenenc-str     table

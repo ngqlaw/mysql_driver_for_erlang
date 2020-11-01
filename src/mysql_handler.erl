@@ -8,9 +8,8 @@
 
 %% API.
 -export([
-	start_link/3, 
-	call/3, call/4,
-	cast/3
+	start_link/1, 
+	call/3, call/4
 ]).
 
 %% gen_server.
@@ -24,10 +23,8 @@
 ]).
 
 -record(state, {
-	pool,
 	socket = 0,
 	connect_id = 0,
-	version = 10,
 	capability = 0,
 	flag = init, 		% init | handshake | ready | commond_event() :: query_sql
 	handle,  			% undefined | #mysql_handle{}
@@ -38,8 +35,8 @@
 %% API functions
 %%====================================================================
 
-start_link(Pool, InitFun, Opts) ->
-	gen_server:start_link(?MODULE, [Pool, InitFun, Opts], []).
+start_link(Opts) ->
+	gen_server:start_link(?MODULE, Opts, []).
 
 %% @doc send the sentence to process and wait for reply
 call(Pid, Event, Bin) ->
@@ -47,45 +44,33 @@ call(Pid, Event, Bin) ->
 call(Pid, _Event, _Bin, _Timeout) when Pid == self() ->
 	{error, call_to_self};
 call(Pid, Event, Bin, Timeout) ->
-	gen_server:cast(Pid, {Event, {self(), Bin}}),
-	receive
-		{ok, Result} ->
-			Result
-	after Timeout ->
-		{error, time_out}
-	end.
-
-%% @doc send the sentence to process
-cast(Pid, Event, Bin) ->
-	gen_server:cast(Pid, {Event, {undefined, Bin}}).
+	gen_server:call(Pid, {Event, Bin}, Timeout).
 		
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
 
-init([Pool, InitFun, Opts]) ->
+init(Opts) ->
 	case mysql_connect:start(Opts) of
-		{ok, Socket} ->
+		{ok, ConnectId, Socket, Capability} ->
 			{ok, #state{
-				pool = {Pool, InitFun},
 				socket = Socket,
-				flag = init,
-				handle = Opts,
+				connect_id = ConnectId,
+				capability = Capability,
+				flag = ready,
 				cache = queue:new()
 			}};
 		Error ->
-			{stop, Error}
+			error_logger:error_msg("Start mysql connect fail:~p", [Error]),
+			{stop, normal}
 	end.
 
-handle_call(_Request, _From, State) ->
-	{reply, ok, State}.
-
-handle_cast({query_sql, {Pid, String}}, #state{
-		socket = Socket,
-		cache = Cache,
-		flag = ready
-	} = State) ->
-	UpdateCache = cache(Cache, query_sql, Pid, String),
+handle_call({query_sql, String}, From, #state{
+	socket = Socket,
+	cache = Cache,
+	flag = ready
+} = State) ->
+	UpdateCache = cache(Cache, query_sql, From, String),
 	{Handle, NewCache} = get_cache(UpdateCache),
 	case do_handle(Socket, Handle) of
     	{ok, #mysql_handle{flag = Flag} = NewHandle} ->
@@ -93,10 +78,18 @@ handle_cast({query_sql, {Pid, String}}, #state{
     	_ ->
     		{noreply, State#state{cache = NewCache}}
     end;
-handle_cast({query_sql, {Pid, String}}, #state{cache = Cache} = State) ->
-	NewCache = cache(Cache, query_sql, Pid, String),
+handle_call({query_sql, String}, From, #state{cache = Cache} = State) ->
+	NewCache = cache(Cache, query_sql, From, String),
 	{noreply, State#state{cache = NewCache}};
-handle_cast(next, #state{socket = Socket, cache = Cache, flag = ready} = State) ->
+
+handle_call(_Request, _From, State) ->
+	{reply, ok, State}.
+
+handle_cast(next, #state{
+	socket = Socket,
+	cache = Cache,
+	flag = ready
+} = State) ->
 	{Handle, NewCache} = get_cache(Cache),
 	case do_handle(Socket, Handle) of
     	{ok, #mysql_handle{flag = Flag} = NewHandle} ->
@@ -110,74 +103,33 @@ handle_cast(next, #state{socket = Socket, cache = Cache, flag = ready} = State) 
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({tcp, Socket, Data}, #state{socket = Socket, flag = init, handle = Opts} = State) ->
-	#mysql_handshake_response{
-		connect_id = ConnectID,
-    	version = Version,
-        capability = Capability,
-        response = ResponseBin
-    } = mysql_connect:handle_reply(Data, Opts),
-	gen_tcp:send(Socket, ResponseBin),
-	{noreply, State#state{
-		flag = handshake,
-		connect_id = ConnectID,
-		version = Version,
-		capability = Capability,
-		handle = #mysql_handle{}
-	}};
-handle_info({tcp, Socket, Data}, #state{
-		pool = {Pool, InitFun},
-		socket = Socket,
-		flag = handshake,
-		capability = Capability,
-		handle = Handle
-	} = State) ->
-	case mysql_handshake:response(Data, Capability, Handle) of
-		ok ->
-			% register
-			mysql_manager:reg(Pool, self(), InitFun),
-			{noreply, State#state{pool = Pool, flag = ready, handle = undefined}};
-		{need_more, NewHandle} ->
-			{noreply, State#state{handle = NewHandle}};
-		{further, _} ->
-			% Client and server possibly exchange further packets 
-			% as required by the server authentication method for 
-			% the user account the client is trying to authenticate against.
-			% !!! TODO not suport now !!!
-			{stop, need_further_exchange, State};
-		Error ->
-			{stop, Error, State}
-	end;
 handle_info({tcp, Socket, Data}, State = #state{
 		socket = Socket,
-		flag = Flag,
-		capability = Capability, 
+		capability = Capability,
 		handle = Handle
 	}) ->
-	NewState = case mysql_route:routing(Flag, Capability, Handle, Data) of
+	NewState = case mysql_route:routing(Handle, Capability, Data) of
 		{ok, NewHandle} ->
-			reply_result(NewHandle),
-			% 触发执行缓存内容
-			next(),
-			State#state{flag = ready, handle = undefined};
+			next(State#state{handle = NewHandle});
 		{need_more, NewHandle} ->
+			inet:setopts(Socket, [{active, once}]),
 			State#state{handle = NewHandle};
 		{continue, NewHandle} ->
-			State#state{handle = NewHandle};
-		{error, Error} ->
-			reply_result(Handle#mysql_handle{result = #mysql_result{result = Error}}),
-			% 触发执行缓存内容
-			next(),
-			State#state{flag = ready, handle = undefined}
+			next(State#state{handle = NewHandle});
+		{error, NewHandle} ->
+			next(State#state{handle = NewHandle})
 	end,
 	{noreply, NewState};
 handle_info({tcp_closed, Socket}, State = #state{socket = Socket}) ->
 	{stop, normal, State};
 handle_info({tcp_error, Socket, Reason}, State = #state{socket = Socket}) ->
 	{stop, Reason, State};
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+	error_logger:info_msg("unknown info msg:~p", [Info]),
 	{noreply, State}.
 
+terminate(_Reason, #state{socket = 0}) ->
+	ok;
 terminate(_Reason, #state{socket = Socket}) ->
 	gen_tcp:close(Socket),
 	ok.
@@ -190,25 +142,59 @@ code_change(_OldVsn, State, _Extra) ->
 %%====================================================================
 
 %% 缓存指令
-cache(Cache, Event, Pid, String) ->
+cache(Cache, Event, From, String) ->
 	Handle = #mysql_handle{
 		msg = String,
-		pid = [Pid],
-		flag = Event,
-		step = 0,
-		packet = #mysql_packet{}, 
-    	result = #mysql_result{}
+		from = From,
+		flag = Event
     },
     queue:in(Handle, Cache).
 
 %% 取指令(先进先出)
 get_cache(Cache) ->
 	case queue:out(Cache) of
-		{{value, Handle}, NewCache} ->
-			{Handle, NewCache};
+		{{value, #mysql_handle{flag = query_sql} = Handle}, NewCache} ->
+			%% TODO 目前仅处理查询
+			{Handle#mysql_handle{
+				packet = #mysql_packet{},
+				result = #mysql_result{}
+			}, NewCache};
 		{empty, NewCache} ->
 			{empty, NewCache}
 	end.   
+
+%% 下一步操作
+next(#state{
+	handle = #mysql_handle{
+		packet = #mysql_packet{sequence_id = Index},
+		result = #mysql_result{
+			result = #mysql_local_infile{filename = Filename},
+			reply = ReplyList
+		} = ResultInfo
+	} = Handle,
+	socket = Socket
+} = State) ->
+	{ok, FileContent} = file:read_file(Filename),
+	SendBin = mysql_command:encode(?COM_TEXT, FileContent, Index + 1),
+	case do_send(Socket, SendBin) of
+		ok ->
+			State;
+		Error ->
+			next(#state{
+				handle = Handle#mysql_handle{
+					result = ResultInfo#mysql_result{
+						is_reply = true,
+						result = undefined,
+						reply = [Error|ReplyList]
+					}
+				}
+			})
+	end;
+next(#state{handle = Handle} = State) ->
+	reply_result(Handle),
+	% 触发执行缓存内容
+	next(),
+	State#state{flag = ready, handle = undefined}.
 
 %% 触发执行缓存中的下一个指令
 next() ->
@@ -216,21 +202,29 @@ next() ->
 
 %% 发送指令
 do_handle(Socket, #mysql_handle{msg = String} = Handle) ->
-	SendBin = mysql_command:encode(String, 0),
+	SendBin = mysql_command:encode(?COM_QUERY, String, 0),
 	case do_send(Socket, SendBin) of
 		ok ->
-			{ok, Handle#mysql_handle{step = 0}};
+			{ok, Handle#mysql_handle{flag = query_sql}};
 		Error ->
-			reply_result(Handle#mysql_handle{result = #mysql_result{result = Error}}),
+			reply_result(Handle#mysql_handle{
+				result = #mysql_result{is_reply = true, result = undefined, reply = [Error]}
+			}),
 			Error
 	end;
 do_handle(_Socket, _) ->
 	empty.
 
 do_send(Socket, Bin) ->
+	inet:setopts(Socket, [{active, once}]),
 	gen_tcp:send(Socket, Bin).
 
 %% 回复调用者
-reply_result(#mysql_handle{result = #mysql_result{result = Result}, pid = Pids}) ->
-	[Pid ! {ok, Result} || Pid <- Pids, Pid =/= undefined],
-	ok.
+reply_result(#mysql_handle{
+	result = #mysql_result{is_reply = true, reply = Result},
+	from = From
+}) when From =/= undefined ->
+	gen_server:reply(From, Result),
+	ok;
+reply_result(_) ->
+	skip.

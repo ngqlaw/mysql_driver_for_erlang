@@ -1,16 +1,20 @@
-{application, mysql_driver,
- [{description, "mysql driver"},
-  {vsn, "0.1.0"},
-  {registered, []},
-  {mod, { mysql_driver_app, []}},
-  {applications,
-   [kernel,
-    stdlib
-   ]},
-  {env,[]},
-  {modules, []},
+{application, mysql_driver, [
+    {description, "mysql driver"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, { mysql_driver_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        poolboy
+    ]},
+    {env, [
+        {pool_size, 1},
+        {pool_max_overflow, 10}
+    ]},
+    {modules, []},
 
-  {maintainers, []},
-  {licenses, []},
-  {links, []}
- ]}.
+    {maintainers, []},
+    {licenses, []},
+    {links, []}
+]}.

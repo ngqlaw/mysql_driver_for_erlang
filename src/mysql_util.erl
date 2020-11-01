@@ -8,7 +8,8 @@
 	parser_integer/1,
 	parser_string_null/1,
 	parser_string_lenenc/1,
-	parser_string_lenencs/1
+	parser_string_lenencs/1,
+	encode_string_lenenc/1, encode_string_lenenc/2
 ]).
 
 parser_integer(<<252:8, Integer:16/little, Rest/binary>>) ->
@@ -41,3 +42,11 @@ parser_string_lenencs(<<>>, Acc) ->
 parser_string_lenencs(Bin, Acc) ->
 	{Value, Rest} = parser_string_lenenc(Bin),
 	parser_string_lenencs(Rest, [Value|Acc]).
+
+encode_string_lenenc(Bin) ->
+	Len = byte_size(Bin),
+	encode_string_lenenc(Len, Bin).
+encode_string_lenenc(Len, Bin) when Len < 252 ->
+	<<Len:8, Bin/binary>>;
+encode_string_lenenc(Len, Bin) ->
+	<<252:8, Len:16/little, Bin/binary>>.

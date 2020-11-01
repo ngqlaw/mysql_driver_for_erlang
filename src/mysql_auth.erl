@@ -16,31 +16,40 @@
 -define(MASK_30,    1073741823).
 -define(MASK_31,    2147483647).
 
-handshake_response(#mysql_handshake_v9{
-        connect_id = ConnectID,
-        index = Index,
-        scramble = Scramble
-    }, UserName, Password) ->
-    Res = handshake_response_320(UserName, Password, Scramble, Index + 1),
+%%%===================================================================
+%%% API
+%%%===================================================================
+handshake_response(#mysql_packet{
+    sequence_id = Index,
+    payload = #mysql_handshake{
+        version = 9,
+        connect_id = ConnectID
+    }
+} = Packet, UserName, Password) ->
+    Res = handshake_response_320(Packet#mysql_packet{
+        sequence_id = Index + 1
+    }, UserName, Password),
     Res#mysql_handshake_response{
         connect_id = ConnectID,
         version = 9
     };
-handshake_response(#mysql_handshake_v10{
+handshake_response(#mysql_packet{
+    sequence_id = Index,
+    payload = #mysql_handshake{
+        version = 10,
         connect_id = ConnectID,
-        index = Index,
-        scramble = Scramble,
-        capability = Capability,
-        status_flags = _StatusFlags,
-        character_set = CharacterSet,
-        auth_plugin_name = _AuthPluginName
-    }, UserName, Password) ->
-    Res = case ?CLIENT_PROTOCOL_41 == (Capability band ?CLIENT_PROTOCOL_41) of
-        true ->
-            handshake_response_41(UserName, Password, CharacterSet, Scramble, Index + 1);
-        false ->
-            handshake_response_320(UserName, Password, Scramble, Index + 1)
-    end,
+        capability = Capability
+    }
+} = Packet, UserName, Password) ->
+    NewPacket = Packet#mysql_packet{sequence_id = Index + 1},
+    Res =
+        case ?CLIENT_PROTOCOL_41 /= (Capability band ?CLIENT_PROTOCOL_41) orelse
+            ?CLIENT_SECURE_CONNECTION /= (Capability band ?CLIENT_SECURE_CONNECTION) of
+            true ->
+                handshake_response_320(NewPacket, UserName, Password);
+            false ->
+                handshake_response_41(NewPacket, UserName, Password)
+        end,
     Res#mysql_handshake_response{
         connect_id = ConnectID,
         version = 10
@@ -51,19 +60,38 @@ handshake_other(#mysql_auth_switch{}) ->
 handshake_other(#mysql_auth_more{}) ->
     skip.
 
-handshake_response_41(UserName, Password, CharacterSet, Scramble, Index) ->
-    Capability = 
-        ?CLIENT_PROTOCOL_41 bor 
-        ?CLIENT_LONG_PASSWORD bor 
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+handshake_response_41(#mysql_packet{
+    sequence_id = Index,
+    payload = #mysql_handshake{
+        scramble = Scramble,
+        capability = ServerCapability,
+        character_set = CharacterSet,
+        auth_plugin_name = AuthPlugin
+    }
+}, UserName, Password) ->
+    Capability =
+        ?CLIENT_PLUGIN_AUTH bor 
+        % ?CLIENT_LONG_PASSWORD bor
         ?CLIENT_LONG_FLAG bor
-        ?CLIENT_SECURE_CONNECTION bor
-        ?CLIENT_TRANSACTIONS,
-    AuthResponse = auth(<<"mysql_native_password">>, Scramble, Password),
-    AuthLen = byte_size(AuthResponse),
+        ?CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA bor
+        ?CLIENT_MULTI_STATEMENTS bor % 支持多语句查询
+        % ?CLIENT_SECURE_CONNECTION bor
+        ?CLIENT_PROTOCOL_41,
+    AuthResponse =
+        case ?CLIENT_PLUGIN_AUTH /= (ServerCapability band ?CLIENT_PLUGIN_AUTH) of
+            true ->
+                auth(<<"mysql_native_password">>, Scramble, Password);
+            false ->
+                auth(AuthPlugin, Scramble, Password)
+        end,
     Payload = list_to_binary([
         <<Capability:32/little, ?MAX_PACKET_SIZE:32/little, CharacterSet:8, 0:23/integer-unit:8>>,
         UserName, <<0:8>>, 
-        <<AuthLen:8, AuthResponse/binary, 0:8>>
+        mysql_util:encode_string_lenenc(AuthResponse),
+        AuthPlugin, <<0:8>>
     ]),
     Len = byte_size(Payload),
     #mysql_handshake_response{
@@ -71,7 +99,12 @@ handshake_response_41(UserName, Password, CharacterSet, Scramble, Index) ->
         response = <<Len:24/little, Index:8, Payload/binary>>
     }.
 
-handshake_response_320(UserName, Password, Scramble, Index) ->
+handshake_response_320(#mysql_packet{
+    sequence_id = Index,
+    payload = #mysql_handshake{
+        scramble = Scramble
+    }
+}, UserName, Password) ->
     Capability = 
         ?CLIENT_LONG_PASSWORD bor 
         ?CLIENT_LONG_FLAG bor
@@ -106,7 +139,16 @@ auth(<<"mysql_native_password">>, Scramble, Password) ->
     Context2 = crypto:hash_update(Context1, AuthPluginData),
     Context3 = crypto:hash_update(Context2, Pwd1),
     Pwd2 = crypto:hash_final(Context3),
-    bxor_binary(binary_to_list(Pwd), binary_to_list(Pwd2), []).
+    bxor_binary(binary_to_list(Pwd), binary_to_list(Pwd2), []);
+%% SHA256( password ) XOR SHA256( "20-bytes random data from server" <concat> SHA256( SHA256( password ) ) )
+auth(<<"caching_sha2_password">>, Scramble, Password) ->
+    {AuthPluginData, _} = erlang:split_binary(Scramble, 20),
+    Pwd = crypto:hash(sha256, Password),
+    Pwd1 = crypto:hash(sha256, Pwd),
+    Pwd2 = crypto:hash(sha256, <<Pwd1/binary, AuthPluginData/binary>>),
+    bxor_binary(binary_to_list(Pwd), binary_to_list(Pwd2), []);
+auth(<<>>, Scramble, Password) ->
+    auth(?DEFAUL_AUTH, Scramble, Password).
 
 bxor_binary([H1|T1], [H2|T2], Res) ->
     bxor_binary(T1, T2, [H1 bxor H2 | Res]);

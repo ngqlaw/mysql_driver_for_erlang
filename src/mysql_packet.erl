@@ -5,37 +5,49 @@
 -include("mysql.hrl").
 
 -export([
-    decode/3
+    decode/4
 ]).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
 %% @doc decode general packet
-decode(<<Len:24/little, Index:8, Data/binary>>, Buff, Capability) ->
+decode(<<Len:24/little, Index:8, Data/binary>>, Buff, Capability, Flag) ->
     {Payload, RestBin} = erlang:split_binary(Data, Len),
     NewPayload = <<Buff/binary, Payload/binary>>,
-    Packet = case parser_gen_packet(NewPayload, Capability) of
+    Packet = case decode_gen_packet(NewPayload, Capability, Flag) of
         {error, need_more} ->
             #mysql_packet{sequence_id = Index, payload = false, buff = NewPayload};
         {error, unknown_packet_form} ->
-            #mysql_packet{sequence_id = Index, payload = true, buff = NewPayload};
+            #mysql_packet{sequence_id = Index, payload = unknown_packet_form, buff = NewPayload};
         Res ->
             #mysql_packet{sequence_id = Index, payload = Res}
     end,
     {Packet, RestBin}.
 
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 %% for general packet
-parser_gen_packet(<<255:8, 255:8, 255:8, _Packet/binary>>, _Capability) ->
+decode_gen_packet(<<255:8, 255:8, 255:8, _Packet/binary>>, _Capability, _Flag) ->
     {error, need_more};
-parser_gen_packet(<<0:8, Packet/binary>>, Capability) ->
+decode_gen_packet(<<0:8, Packet/binary>>, Capability, _Flag) when byte_size(Packet) >= 6 ->
     ok_packet(Packet, Capability);
-parser_gen_packet(<<255:8, Packet/binary>>, Capability) ->
+decode_gen_packet(<<255:8, Packet/binary>>, Capability, _Flag) ->
     Protocal41Flags = ?CLIENT_PROTOCOL_41 band Capability,
     error_packet(Packet, Protocal41Flags);
-parser_gen_packet(<<254:8, Packet/binary>>, Capability) when byte_size(Packet) < 8 ->
+decode_gen_packet(<<254:8, Packet/binary>>, Capability, _Flag) when byte_size(Packet) =< 8 ->
     Protocal41Flags = ?CLIENT_PROTOCOL_41 band Capability,
     eof_packet(Packet, Protocal41Flags);
-parser_gen_packet(<<254:8, Packet/binary>>, Capability) ->
-    ok_packet(Packet, Capability);
-parser_gen_packet(_Packet, _Capability) ->
+decode_gen_packet(<<254:8, Packet/binary>>, _Capability, ?MYSQL_FLAG_HANDSHAKE) ->
+    mysql_handshake:auth_switch(Packet);
+decode_gen_packet(<<1:8, Packet/binary>>, _Capability, ?MYSQL_FLAG_HANDSHAKE) ->
+    mysql_handshake:auth_more(Packet);
+decode_gen_packet(<<9:8, Packet/binary>>, _Capability, ?MYSQL_FLAG_HANDSHAKE) ->
+    mysql_handshake:v9(Packet);
+decode_gen_packet(<<10:8, Packet/binary>>, _Capability, ?MYSQL_FLAG_HANDSHAKE) ->
+    mysql_handshake:v10(Packet);
+decode_gen_packet(_Packet, _Capability, _Flag) ->
     {error, unknown_packet_form}.
     
 %% OK_Packet

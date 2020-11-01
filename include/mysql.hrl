@@ -1,17 +1,19 @@
+-ifndef(MYSQL_H).
+-define(MYSQL_H, true).
 
 -define(OPTIONS, [
-	  binary, 
-	  {packet, 0}, 
-	  {reuseaddr, true}, 
-	  {nodelay, false}, 
-	  {delay_send, true},
-	  {send_timeout, 5000}, 
-	  {keepalive, true}, 
-	  {exit_on_close, true}
+	  binary,
+	  {packet, 0},
+	  {reuseaddr, true},
+	  {nodelay, false},
+	  {send_timeout, 5000},
+	  {exit_on_close, true},
+      {active, false}
 	 ]).
 
--define(MAX_PACKET_SIZE, 1048576). %setting accepted single packet size limit
--define(MAX_LIMIT_SIZE, 16777216). %mysql single packet size limit
+-define(MAX_PACKET_SIZE, 1048576). % setting accepted single packet size limit
+-define(MAX_LIMIT_SIZE, 16777216). % mysql single packet size limit
+-define(DEFAUL_AUTH, <<"caching_sha2_password">>).
 
 %% Capability Flags
 -define(CLIENT_LONG_PASSWORD, 					16#00000001).
@@ -38,7 +40,8 @@
 -define(CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA, 	16#00200000).
 -define(CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS, 	16#00400000).
 -define(CLIENT_SESSION_TRACK, 					16#00800000).
--define(CLIENT_DEPRECATE_EOF, 					16#01000000). 
+-define(CLIENT_DEPRECATE_EOF, 					16#01000000).
+-define(CLIENT_OPTIONAL_RESULTSET_METADATA,     16#02000000).
 
 %% Status Flags
 -define(SERVER_STATUS_IN_TRANS, 				16#0001).
@@ -62,6 +65,7 @@
 -define(SESSION_TRACK_STATE_CHANGE, 			2).
 
 %% Command
+-define(COM_TEXT,                       -1).
 -define(COM_SLEEP, 						0).
 -define(COM_QUIT, 						1).
 -define(COM_INIT_DB, 					2).
@@ -96,46 +100,46 @@
 -define(COM_RESET_CONNECTION, 			31).
 
 %% Column Types
--define(MYSQL_TYPE_DECIMAL, 0).
--define(MYSQL_TYPE_TINY, 1).
--define(MYSQL_TYPE_SHORT, 2).
--define(MYSQL_TYPE_LONG, 3).
--define(MYSQL_TYPE_FLOAT, 4).
--define(MYSQL_TYPE_DOUBLE, 5).
--define(MYSQL_TYPE_NULL, 6).
--define(MYSQL_TYPE_TIMESTAMP, 7).
--define(MYSQL_TYPE_LONGLONG, 8).
--define(MYSQL_TYPE_INT24, 9).
--define(MYSQL_TYPE_DATE, 10).
--define(MYSQL_TYPE_TIME, 11).
--define(MYSQL_TYPE_DATETIME, 12).
--define(MYSQL_TYPE_YEAR, 13).
--define(MYSQL_TYPE_NEWDATE, 14).
--define(MYSQL_TYPE_VARCHAR, 15).
--define(MYSQL_TYPE_BIT, 16).
--define(MYSQL_TYPE_TIMESTAMP2, 17).
--define(MYSQL_TYPE_DATETIME2, 18).
--define(MYSQL_TYPE_TIME2, 19).
--define(MYSQL_TYPE_NEWDECIMAL, 246).
--define(MYSQL_TYPE_ENUM, 247).
--define(MYSQL_TYPE_SET, 248).
--define(MYSQL_TYPE_TINY_BLOB, 249).
--define(MYSQL_TYPE_MEDIUM_BLOB, 250).
--define(MYSQL_TYPE_LONG_BLOB, 251).
--define(MYSQL_TYPE_BLOB, 252).
--define(MYSQL_TYPE_VAR_STRING, 253).
--define(MYSQL_TYPE_STRING, 254).
--define(MYSQL_TYPE_GEOMETRY, 255).
+-define(MYSQL_TYPE_DECIMAL,         0).
+-define(MYSQL_TYPE_TINY,            1).
+-define(MYSQL_TYPE_SHORT,           2).
+-define(MYSQL_TYPE_LONG,            3).
+-define(MYSQL_TYPE_FLOAT,           4).
+-define(MYSQL_TYPE_DOUBLE,          5).
+-define(MYSQL_TYPE_NULL,            6).
+-define(MYSQL_TYPE_TIMESTAMP,       7).
+-define(MYSQL_TYPE_LONGLONG,        8).
+-define(MYSQL_TYPE_INT24,           9).
+-define(MYSQL_TYPE_DATE,            10).
+-define(MYSQL_TYPE_TIME,            11).
+-define(MYSQL_TYPE_DATETIME,        12).
+-define(MYSQL_TYPE_YEAR,            13).
+-define(MYSQL_TYPE_NEWDATE,         14).
+-define(MYSQL_TYPE_VARCHAR,         15).
+-define(MYSQL_TYPE_BIT,             16).
+-define(MYSQL_TYPE_TIMESTAMP2,      17).
+-define(MYSQL_TYPE_DATETIME2,       18).
+-define(MYSQL_TYPE_TIME2,           19).
+-define(MYSQL_TYPE_NEWDECIMAL,      246).
+-define(MYSQL_TYPE_ENUM,            247).
+-define(MYSQL_TYPE_SET,             248).
+-define(MYSQL_TYPE_TINY_BLOB,       249).
+-define(MYSQL_TYPE_MEDIUM_BLOB,     250).
+-define(MYSQL_TYPE_LONG_BLOB,       251).
+-define(MYSQL_TYPE_BLOB,            252).
+-define(MYSQL_TYPE_VAR_STRING,      253).
+-define(MYSQL_TYPE_STRING,          254).
+-define(MYSQL_TYPE_GEOMETRY,        255).
 
--record(mysql_handshake_v9, {
-    connect_id = 0,
-    index = 0,
-    scramble = <<>>
-}).
+-define(RESULTSET_METADATA_NONE, 0).
+-define(RESULTSET_METADATA_FULL, 1).
 
--record(mysql_handshake_v10, {
+-define(MYSQL_FLAG_QUERY, query_sql).
+-define(MYSQL_FLAG_HANDSHAKE, handshake).
+
+-record(mysql_handshake, {
+    version = 0,
     connect_id = 0,
-    index = 0,
     scramble = <<>>,
     capability = 0,
     status_flags = 0,
@@ -144,13 +148,11 @@
 }).
 
 -record(mysql_auth_switch, {
-    index = 0,
     plugin_name = <<>>,
     data = <<>>
 }).
 
 -record(mysql_auth_more ,{
-    index = 0,
     data = <<>>
 }).
 
@@ -188,16 +190,31 @@
     status_flags = 0
 }).
 
+-record(mysql_local_infile, {
+    filename = <<>>
+}).
+
+-record(mysql_query, {
+    step = 0,
+    is_eof = true,
+    metadata_mark = 0,
+    column = 0,
+    columns = [],
+    rows = []
+}).
+
 -record(mysql_result, {
-    is_reply = 0,       % 0(not reply) | 1(reply)
-    result = []
+    is_reply = false,       % false(not reply) | true(reply)
+    reply = [],
+    result = undefined
 }).
 
 -record(mysql_handle, {
     msg = <<>>,                     % common string
-    pid = [],                       % request pid
+    from,                           % request pid
     flag = query_sql,               % for now only support:query_sql
-    step = 0,
-    packet = #mysql_packet{}, 
-    result = #mysql_result{}
+    packet, 
+    result
 }).
+
+-endif.
