@@ -84,12 +84,12 @@ column_definition_41(Bin, _Capability, COM) ->
     {OrgName, Rest6} = mysql_util:parser_string_lenenc(Rest5),
     {_NextLength, 
     <<
-        CharacterSet:16, 
-        ColumnLength:32, 
+        CharacterSet:16/little, 
+        ColumnLength:32/little, 
         Type:8, 
-        Flags:16, 
+        Flags:16/little, 
         Decimals:8, 
-        _Filler:16, 
+        _Filler:16/little, 
         Rest7/binary
     >>} = mysql_util:parser_integer(Rest6),
     case COM == ?COM_FIELD_LIST of
@@ -124,11 +124,11 @@ column_definition_41(Bin, _Capability, COM) ->
 column_definition_320(Bin, Capability, COM) ->
     {Table, Rest1} = mysql_util:parser_string_lenenc(Bin),
     {Name, Rest2} = mysql_util:parser_string_lenenc(Rest1),
-    {_NextLength, <<ColumnLength:24, Rest3/binary>>} = mysql_util:parser_integer(Rest2),
+    {_NextLength, <<ColumnLength:24/little, Rest3/binary>>} = mysql_util:parser_integer(Rest2),
     {_LengthOfTypeField, <<Type:8, Rest4/binary>>} = mysql_util:parser_integer(Rest3),
     case ?CLIENT_LONG_FLAG == ?CLIENT_LONG_FLAG band Capability of
         true ->
-            {_Len1, <<Flags:16, Decimals:8, Rest5/binary>>} = mysql_util:parser_integer(Rest4);
+            {_Len1, <<Flags:16/little, Decimals:8, Rest5/binary>>} = mysql_util:parser_integer(Rest4);
         false ->
             <<_Len1:8, Flags:8, Decimals:8, Rest5/binary>> = Rest4
     end,

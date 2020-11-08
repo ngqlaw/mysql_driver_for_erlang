@@ -23,7 +23,6 @@ decode(<<Len:24/little, Index:8, Data/binary>>, Buff, Capability, Flag) ->
         Res ->
             #mysql_packet{sequence_id = Index, payload = Res}
     end,
-    % error_logger:info_msg("packet:~p", [Packet]),
     {Packet, RestBin}.
 
 %%%===================================================================

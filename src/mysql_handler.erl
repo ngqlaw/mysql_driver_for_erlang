@@ -67,12 +67,13 @@ init(Opts) ->
 
 handle_call({query_sql, String}, From, #state{
 	socket = Socket,
+	capability = Capability,
 	cache = Cache,
 	flag = ready
 } = State) ->
 	UpdateCache = cache(Cache, query_sql, From, String),
 	{Handle, NewCache} = get_cache(UpdateCache),
-	case do_handle(Socket, Handle) of
+	case do_handle(Socket, Capability, Handle) of
     	{ok, #mysql_handle{flag = Flag} = NewHandle} ->
     		{noreply, State#state{flag = Flag, handle = NewHandle, cache = NewCache}};
     	_ ->
@@ -87,11 +88,12 @@ handle_call(_Request, _From, State) ->
 
 handle_cast(next, #state{
 	socket = Socket,
+	capability = Capability,
 	cache = Cache,
 	flag = ready
 } = State) ->
 	{Handle, NewCache} = get_cache(Cache),
-	case do_handle(Socket, Handle) of
+	case do_handle(Socket, Capability, Handle) of
     	{ok, #mysql_handle{flag = Flag} = NewHandle} ->
     		{noreply, State#state{flag = Flag, handle = NewHandle, cache = NewCache}};
     	empty ->
@@ -190,8 +192,8 @@ next(#state{
 				}
 			})
 	end;
-next(#state{handle = Handle} = State) ->
-	reply_result(Handle),
+next(#state{capability = Capability, handle = Handle} = State) ->
+	reply_result(Capability, Handle),
 	%% 触发执行缓存内容
 	next(),
 	State#state{flag = ready, handle = undefined}.
@@ -201,18 +203,18 @@ next() ->
 	gen_server:cast(self(), next).
 
 %% 发送指令
-do_handle(Socket, #mysql_handle{msg = String} = Handle) ->
+do_handle(Socket, Capability, #mysql_handle{msg = String} = Handle) ->
 	SendBin = mysql_command:encode(?COM_QUERY, String, 0),
 	case do_send(Socket, SendBin) of
 		ok ->
 			{ok, Handle#mysql_handle{flag = query_sql}};
 		Error ->
-			reply_result(Handle#mysql_handle{
+			reply_result(Capability, Handle#mysql_handle{
 				result = #mysql_result{is_reply = true, result = undefined, reply = [Error]}
 			}),
 			Error
 	end;
-do_handle(_Socket, _) ->
+do_handle(_Socket, _Capability, _Handle) ->
 	empty.
 
 do_send(Socket, Bin) ->
@@ -220,11 +222,11 @@ do_send(Socket, Bin) ->
 	gen_tcp:send(Socket, Bin).
 
 %% 回复调用者
-reply_result(#mysql_handle{
+reply_result(Capability, #mysql_handle{
 	result = #mysql_result{is_reply = true, reply = Result},
 	from = From
 }) when From =/= undefined ->
-	gen_server:reply(From, Result),
+	gen_server:reply(From, mysql_result:translate(Capability, Result)),
 	ok;
-reply_result(_) ->
+reply_result(_Capability, _Handle) ->
 	skip.

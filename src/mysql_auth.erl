@@ -4,9 +4,11 @@
 
 -include("mysql.hrl").
 
+-include_lib("public_key/include/public_key.hrl").
+
 -export([
     handshake_response/3,
-    handshake_other/1
+    auth_more/4
 ]).
 
 %% for Old Password Authentication
@@ -55,10 +57,22 @@ handshake_response(#mysql_packet{
         version = 10
     }.
 
-handshake_other(#mysql_auth_switch{}) ->
-    skip;
-handshake_other(#mysql_auth_more{}) ->
-    skip.
+%% @doc full auth encrypt
+%% https://github.com/mysql-otp/mysql-otp/blob/master/src/mysql_protocol.erl
+auth_more(ServerVersion, Scramble, Password, Data) ->
+    %% With caching_sha2_password authentication, anything
+    %% other than the above should be the public key of the
+    %% server.
+    PubKey = case public_key:pem_decode(Data) of
+        [PemEntry = #'SubjectPublicKeyInfo'{}] ->
+            public_key:pem_entry_decode(PemEntry);
+        [PemEntry = #'RSAPublicKey'{}] ->
+            PemEntry
+    end,
+    %% Serveri has sent its public key (certainly specific to the caching_sha2_password
+    %% method). We encrypt the password with the public key we received and send
+    %% it back to the server.
+    encrypt_password(Password, Scramble, PubKey, ServerVersion).
 
 %%%===================================================================
 %%% Internal functions
@@ -132,7 +146,7 @@ auth(<<"mysql_old_password">>, Scramble, Password) ->
     list_to_binary([E bxor Extra || E <- List]);
 %% SHA1( password ) XOR SHA1( "20-bytes random data from server" <concat> SHA1( SHA1( password ) ) )
 auth(<<"mysql_native_password">>, Scramble, Password) ->
-    {AuthPluginData, _} = erlang:split_binary(Scramble, 20),
+    AuthPluginData = trim_salt(Scramble),
     Pwd = crypto:hash(sha, Password),
     Pwd1 = crypto:hash(sha, Pwd),
     Context1 = crypto:hash_init(sha),
@@ -142,7 +156,7 @@ auth(<<"mysql_native_password">>, Scramble, Password) ->
     bxor_binary(binary_to_list(Pwd), binary_to_list(Pwd2), []);
 %% SHA256( password ) XOR SHA256( "20-bytes random data from server" <concat> SHA256( SHA256( password ) ) )
 auth(<<"caching_sha2_password">>, Scramble, Password) ->
-    {AuthPluginData, _} = erlang:split_binary(Scramble, 20),
+    AuthPluginData = trim_salt(Scramble),
     Pwd = crypto:hash(sha256, Password),
     Pwd1 = crypto:hash(sha256, Pwd),
     Pwd2 = crypto:hash(sha256, <<Pwd1/binary, AuthPluginData/binary>>),
@@ -176,3 +190,49 @@ do_rnd(N, List, Seed1, Seed2) ->
     Float = (float(NSeed1) / float(?MASK_30)) * 31,
     Val = trunc(Float) + 64,
     do_rnd(N - 1, [Val | List], NSeed1, NSeed2).
+
+%% 加密
+encrypt_password(Password, Salt, PubKey, ServerVersion) when is_binary(Password) ->
+    %% From http://www.dataarchitect.cloud/preparing-your-community-connector-for-mysql-8-part-2-sha256/:
+    %% "The password is "obfuscated" first by employing a rotating "xor" against
+    %% the seed bytes that were given to the authentication plugin upon initial
+    %% handshake [the auth plugin data].
+    %% [...]
+    %% Buffer would then be encrypted using the RSA public key the server passed
+    %% to the client.  The resulting buffer would then be passed back to the
+    %% server."
+    Salt1 = trim_salt(Salt),
+    Salt1Size = byte_size(Salt1),
+
+    %% While the article does not mention it, the password must be null-terminated
+    %% before obfuscation.
+    Password1 = <<Password/binary, 0>>,
+    Size = bit_size(Password1),
+    <<PasswordNum:Size>> = Password1,
+    PSize = byte_size(Password1),
+    <<SaltNum:Size, _/bitstring>> = case Salt1Size < PSize of
+        true ->
+            binary:copy(Salt1, (PSize div Salt1Size) + 1);
+        false ->
+            Salt1
+    end,
+    Password2 = <<(PasswordNum bxor SaltNum):Size>>,
+
+    %% From http://www.dataarchitect.cloud/preparing-your-community-connector-for-mysql-8-part-2-sha256/:
+    %% "It's important to note that a incompatible change happened in server 8.0.5.
+    %% Prior to server 8.0.5 the encryption was done using RSA_PKCS1_PADDING.
+    %% With 8.0.5 it is done with RSA_PKCS1_OAEP_PADDING."
+    RsaPadding = case ServerVersion < [8, 0, 5] of
+        true -> rsa_pkcs1_padding;
+        false -> rsa_pkcs1_oaep_padding
+    end,
+    %% The option rsa_pad was renamed to rsa_padding in OTP/22, but rsa_pad
+    %% is being kept for backwards compatibility.
+    public_key:encrypt_public(Password2, PubKey, [{rsa_pad, RsaPadding}]);
+encrypt_password(Password, Salt, PubKey, ServerVersion) ->
+    encrypt_password(iolist_to_binary(Password), Salt, PubKey, ServerVersion).
+
+trim_salt(<<SaltNoNul:20/binary-unit:8, 0>>) ->
+    SaltNoNul;
+trim_salt(Salt = <<_:20/binary-unit:8>>) ->
+    Salt.
